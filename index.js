@@ -1,0 +1,1052 @@
+// ==UserScript==
+// @name         Funiber Bypass Enhanced v4
+// @namespace    Violentmonkey Scripts
+// @version      3.5
+// @description  Responde automaticamente questões da prova com Gemini - Versão corrigida
+// @match        *://*.funiber.org/*
+// @grant        GM_addStyle
+// @author       mzzvxm
+// ==/UserScript==
+
+;(async () => {
+  const API_KEY = "AIzaSyDzHvHcoBgfeNJf0iwM2AfjQM3mQ9sW-W8"
+  const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`
+  let isPanelMinimized = false
+
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  function obterTituloProva() {
+    // Busca o título da prova na página
+    const tituloElement =
+      document.querySelector("span.multilang.traducir-TR046.traducido") ||
+      document.querySelector('span[lang="fnbr"].multilang') ||
+      document.querySelector(".multilang.traducido")
+
+    if (tituloElement) {
+      return tituloElement.textContent.trim()
+    }
+
+    // Fallback: busca outros possíveis seletores
+    const breadcrumb = document.querySelector(".breadcrumb-item.active, .page-header-headings h1")
+    if (breadcrumb) {
+      return breadcrumb.textContent.trim()
+    }
+
+    return "@by mzzvxm" // fallback padrão
+  }
+
+  function createSplashScreen() {
+    const splash = document.createElement("div")
+    splash.id = "gemini-splash"
+    splash.innerHTML = `
+      <div class="splash-content">
+        <div class="splash-logo">🧠</div>
+        <h1>Funiber Bypass</h1>
+        <div class="loading-dots">
+          <span></span><span></span><span></span>
+        </div>
+        <div class="splash-status">Conectando...</div>
+      </div>
+    `
+    document.body.appendChild(splash)
+
+    GM_addStyle(`
+      #gemini-splash {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background: rgba(0, 0, 0, 0.9);
+        backdrop-filter: blur(10px);
+        z-index: 99999;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        transition: opacity 0.4s ease;
+      }
+      .splash-content {
+        text-align: center;
+        padding: 30px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 16px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+      .splash-logo {
+        font-size: 48px;
+        margin-bottom: 16px;
+        animation: bounce 1.5s infinite;
+      }
+      .splash-content h1 {
+        font-size: 24px;
+        margin: 0 0 20px;
+        font-weight: 600;
+        background: linear-gradient(90deg, #4ade80, #22d3ee);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+      .loading-dots {
+        display: flex;
+        justify-content: center;
+        gap: 4px;
+        margin: 20px 0;
+      }
+      .loading-dots span {
+        width: 8px;
+        height: 8px;
+        background: #4ade80;
+        border-radius: 50%;
+        animation: pulse 1.4s infinite both;
+      }
+      .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+      .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+      .splash-status {
+        font-size: 14px;
+        opacity: 0.8;
+      }
+      @keyframes bounce {
+        0%, 20%, 50%, 80%, 100% { transform: translateY(0); }
+        40% { transform: translateY(-10px); }
+        60% { transform: translateY(-5px); }
+      }
+      @keyframes pulse {
+        0%, 80%, 100% { transform: scale(0); opacity: 0.5; }
+        40% { transform: scale(1); opacity: 1; }
+      }
+    `)
+
+    return splash
+  }
+
+  function updateSplashStatus(message) {
+    const statusEl = document.querySelector(".splash-status")
+    if (statusEl) statusEl.textContent = message
+  }
+
+  function removeSplashScreen() {
+    const splash = document.getElementById("gemini-splash")
+    if (splash) {
+      splash.style.opacity = "0"
+      setTimeout(() => splash.remove(), 400)
+    }
+  }
+
+  function createUI() {
+    const panel = document.createElement("div")
+    panel.id = "gemini-panel"
+    panel.innerHTML = `
+      <div class="panel-header">
+        <span class="logo">🧠</span>
+        <span class="title">Funiber Bypass</span>
+        <div class="controls">
+          <button id="gemini-minimize" title="Minimizar">−</button>
+          <div class="status-dot" id="status-dot"></div>
+        </div>
+      </div>
+      <div class="panel-body" id="panel-body">
+        <div class="status-bar">
+          <span id="gemini-status">Inicializando...</span>
+        </div>
+        <div class="course-info" id="course-info">
+          <span>📚 Detectando disciplina...</span>
+        </div>
+        <div class="actions">
+          <button id="gemini-start" class="btn-primary" disabled>Resolver Todas</button>
+          <button id="gemini-settings" class="btn-secondary">⚙️</button>
+        </div>
+        <div id="settings-panel" class="settings hidden">
+          <div class="setting">
+            <label>Delay: <input type="number" id="delay-input" value="2000" min="1000" max="5000" step="100">ms</label>
+          </div>
+          <div class="setting">
+            <label><input type="checkbox" id="show-reasoning" checked> Explicações detalhadas</label>
+          </div>
+          <div class="setting">
+            <label><input type="checkbox" id="auto-show-explanation"> Mostrar explicação automaticamente</label>
+          </div>
+        </div>
+        <div id="questoes-list" class="questoes"></div>
+      </div>
+    `
+    document.body.appendChild(panel)
+
+    GM_addStyle(`
+      #gemini-panel {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        width: 340px;
+        max-height: 80vh;
+        background: #ffffff;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+        border: 1px solid #e5e7eb;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-size: 13px;
+        z-index: 9999;
+        overflow: hidden;
+        transition: all 0.3s ease;
+      }
+      .panel-header {
+        display: flex;
+        align-items: center;
+        padding: 12px 16px;
+        background: #f8fafc;
+        border-bottom: 1px solid #e5e7eb;
+        cursor: move;
+      }
+      .logo {
+        font-size: 16px;
+        margin-right: 8px;
+      }
+      .title {
+        flex: 1;
+        font-weight: 600;
+        color: #1f2937;
+        font-size: 14px;
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .controls button {
+        background: none;
+        border: none;
+        color: #6b7280;
+        cursor: pointer;
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: bold;
+      }
+      .controls button:hover {
+        background: #e5e7eb;
+        color: #374151;
+      }
+      .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #ef4444;
+        transition: background 0.3s ease;
+      }
+      .status-dot.connected {
+        background: #10b981;
+      }
+      .panel-body {
+        padding: 16px;
+        overflow-y: auto;
+        max-height: calc(80vh - 60px);
+      }
+      .status-bar {
+        margin-bottom: 12px;
+        padding: 8px 12px;
+        background: #f1f5f9;
+        border-radius: 6px;
+        color: #475569;
+        font-size: 12px;
+        text-align: center;
+      }
+      .course-info {
+        margin-bottom: 12px;
+        padding: 8px 12px;
+        background: #eff6ff;
+        border-radius: 6px;
+        color: #1e40af;
+        font-size: 11px;
+        border-left: 3px solid #3b82f6;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+      .btn-primary {
+        flex: 1;
+        padding: 8px 12px;
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-weight: 500;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      .btn-primary:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+      }
+      .btn-primary:disabled {
+        background: #d1d5db;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+      .btn-secondary {
+        padding: 8px;
+        background: #f3f4f6;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: all 0.2s ease;
+      }
+      .btn-secondary:hover {
+        background: #e5e7eb;
+      }
+      .settings {
+        background: #f8fafc;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 16px;
+        border: 1px solid #e5e7eb;
+      }
+      .setting {
+        margin-bottom: 8px;
+      }
+      .setting:last-child {
+        margin-bottom: 0;
+      }
+      .setting label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: #374151;
+      }
+      .setting input[type="number"] {
+        width: 60px;
+        padding: 2px 6px;
+        border: 1px solid #d1d5db;
+        border-radius: 4px;
+        font-size: 11px;
+      }
+      .setting input[type="checkbox"] {
+        margin: 0;
+      }
+      .questoes {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .questao-item {
+        background: #f8fafc;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        padding: 10px;
+        transition: all 0.2s ease;
+      }
+      .questao-item.processing {
+        border-color: #3b82f6;
+        background: #eff6ff;
+      }
+      .questao-item.success {
+        border-color: #10b981;
+        background: #ecfdf5;
+      }
+      .questao-item.error {
+        border-color: #ef4444;
+        background: #fef2f2;
+      }
+      .questao-item.partial {
+        border-color: #f59e0b;
+        background: #fffbeb;
+      }
+      .questao-title {
+        font-size: 12px;
+        color: #374151;
+        margin-bottom: 6px;
+        line-height: 1.3;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .questao-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 11px;
+        margin-bottom: 8px;
+      }
+      .questao-result {
+        color: #10b981;
+        font-weight: 500;
+        font-size: 10px;
+      }
+      .questao-partial {
+        color: #f59e0b;
+        font-weight: 500;
+        font-size: 10px;
+      }
+      .questao-error {
+        color: #ef4444;
+      }
+      .questao-btn {
+        padding: 4px 8px;
+        background: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 10px;
+        cursor: pointer;
+        transition: background 0.2s ease;
+      }
+      .questao-btn:hover {
+        background: #2563eb;
+      }
+      .questao-btn:disabled {
+        background: #9ca3af;
+        cursor: not-allowed;
+      }
+      .questao-actions {
+        display: flex;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      .btn-explain {
+        padding: 4px 8px;
+        background: #8b5cf6;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 10px;
+        cursor: pointer;
+        transition: background 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 3px;
+      }
+      .btn-explain:hover {
+        background: #7c3aed;
+      }
+      .btn-retry {
+        padding: 4px 8px;
+        background: #f59e0b;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        font-size: 10px;
+        cursor: pointer;
+        transition: background 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 3px;
+      }
+      .btn-retry:hover {
+        background: #d97706;
+      }
+      .explanation {
+        margin-top: 8px;
+        padding: 10px;
+        background: #f0f9ff;
+        border-radius: 6px;
+        font-size: 11px;
+        color: #0c4a6e;
+        line-height: 1.4;
+        border-left: 3px solid #0ea5e9;
+        display: none;
+      }
+      .explanation.show {
+        display: block;
+        animation: slideDown 0.3s ease;
+      }
+      .explanation-header {
+        font-weight: 600;
+        margin-bottom: 6px;
+        color: #0c4a6e;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .associations-result {
+        margin-top: 6px;
+        font-size: 10px;
+      }
+      .association-item {
+        background: rgba(16, 185, 129, 0.1);
+        padding: 4px 6px;
+        margin: 2px 0;
+        border-radius: 3px;
+        border-left: 2px solid #10b981;
+      }
+      .association-item.error {
+        background: rgba(239, 68, 68, 0.1);
+        border-left: 2px solid #ef4444;
+      }
+      .hidden {
+        display: none;
+      }
+      .minimized {
+        height: 45px;
+        overflow: hidden;
+      }
+      .minimized .panel-body {
+        display: none;
+      }
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes slideDown {
+        from { opacity: 0; max-height: 0; }
+        to { opacity: 1; max-height: 500px; }
+      }
+      .fade-in {
+        animation: fadeIn 0.3s ease;
+      }
+    `)
+
+    setupEventListeners()
+    return panel
+  }
+
+  function setupEventListeners() {
+    document.getElementById("gemini-minimize").addEventListener("click", toggleMinimize)
+    document.getElementById("gemini-settings").addEventListener("click", toggleSettings)
+    document.getElementById("gemini-start").addEventListener("click", resolverTodasQuestoes)
+  }
+
+  function toggleMinimize() {
+    const panel = document.getElementById("gemini-panel")
+    const btn = document.getElementById("gemini-minimize")
+
+    isPanelMinimized = !isPanelMinimized
+
+    if (isPanelMinimized) {
+      panel.classList.add("minimized")
+      btn.textContent = "+"
+    } else {
+      panel.classList.remove("minimized")
+      btn.textContent = "−"
+    }
+  }
+
+  function toggleSettings() {
+    const settings = document.getElementById("settings-panel")
+    settings.classList.toggle("hidden")
+  }
+
+  function updateStatus(message, isConnected = false) {
+    const statusEl = document.getElementById("gemini-status")
+    const dotEl = document.getElementById("status-dot")
+
+    statusEl.textContent = message
+
+    if (isConnected) {
+      dotEl.classList.add("connected")
+    } else {
+      dotEl.classList.remove("connected")
+    }
+  }
+
+  function updateCourseInfo(titulo) {
+    const courseEl = document.getElementById("course-info")
+    courseEl.innerHTML = `📚 ${titulo}`
+  }
+
+  async function testarConexao() {
+    try {
+      updateSplashStatus("Testando conexão...")
+
+      const res = await fetch(GEMINI_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: "Diga apenas: ok" }] }],
+        }),
+      })
+
+      const data = await res.json()
+
+      if (data?.candidates?.[0]?.content?.parts?.[0]?.text?.toLowerCase().includes("ok")) {
+        updateStatus("Conectado", true)
+        document.getElementById("gemini-start").disabled = false
+        updateSplashStatus("Conectado!")
+
+        // Detectar título da prova
+        const titulo = obterTituloProva()
+        updateCourseInfo(titulo)
+
+        await delay(800)
+        return true
+      } else {
+        throw new Error("Resposta inesperada da API")
+      }
+    } catch (err) {
+      updateStatus(`Erro: ${err.message}`)
+      updateSplashStatus("Erro de conexão")
+      console.error(err)
+      await delay(1500)
+      return false
+    }
+  }
+
+  function obterQuestoes() {
+    const questoesMultipla = [...document.querySelectorAll('div[class^="que multichoice"]')].map((el, index) => {
+      const enunciado = el.querySelector(".qtext")?.innerText?.trim()
+      const alternativas = [...el.querySelectorAll(".answer label")].map((label) => {
+        const texto = label.innerText.replace(/^[a-d]\./i, "").trim()
+        const letra = label.innerText.trim().substring(0, 1).toLowerCase()
+        const input = label.previousElementSibling
+        return { letra, texto, input }
+      })
+      return { tipo: "multipla", el, index, enunciado, alternativas }
+    })
+
+    // Melhor detecção de questões de associação
+    const questoesAssociacao = [...document.querySelectorAll("div.formulation")]
+      .filter((formulation) => {
+        return formulation.querySelector("table.answer") && formulation.querySelectorAll("select").length > 0
+      })
+      .map((formulation, index) => {
+        const table = formulation.querySelector("table.answer")
+        const enunciado = formulation.querySelector(".qtext")?.innerText?.trim() || "Questão de associação"
+
+        const linhas = [...table.querySelectorAll("tr")].filter((tr) => {
+          return tr.querySelector("td.text") && tr.querySelector("select")
+        })
+
+        const alternativas = linhas
+          .map((linha, i) => {
+            const textoElement = linha.querySelector("td.text")
+            const texto = textoElement ? textoElement.innerText.trim() : ""
+            const select = linha.querySelector("select")
+            const opcoes = select ? [...select.querySelectorAll("option")].filter((o) => o.value !== "0") : []
+
+            return {
+              texto,
+              select,
+              opcoes: opcoes.map((op) => ({ value: op.value, text: op.textContent.trim() })),
+            }
+          })
+          .filter((alt) => alt.texto && alt.select && alt.opcoes.length > 0)
+
+        return {
+          tipo: "associacao",
+          index: questoesMultipla.length + index,
+          el: formulation,
+          enunciado,
+          alternativas,
+        }
+      })
+
+    return [...questoesMultipla, ...questoesAssociacao]
+  }
+
+  async function gerarResposta(questao, incluirExplicacao = false) {
+    const tituloProva = obterTituloProva()
+
+    if (questao.tipo === "multipla") {
+      const prompt = incluirExplicacao
+        ? `Você é um especialista na disciplina "${tituloProva}".
+
+Pergunta: ${questao.enunciado}
+
+Alternativas:
+${questao.alternativas.map((a) => `${a.letra}) ${a.texto}`).join("\n")}
+
+IMPORTANTE: Responda SEMPRE em português brasileiro, mesmo que a pergunta esteja em outro idioma.
+
+Forneça sua resposta no seguinte formato:
+Resposta: [letra da alternativa correta]
+Explicação: [explicação detalhada em português do porquê esta é a resposta correta]`
+        : `Você é um especialista na disciplina "${tituloProva}".
+
+Pergunta: ${questao.enunciado}
+
+Alternativas:
+${questao.alternativas.map((a) => `${a.letra}) ${a.texto}`).join("\n")}
+
+Responda apenas com a letra da alternativa correta.`
+
+      try {
+        const res = await fetch(GEMINI_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: incluirExplicacao ? 500 : 100,
+            },
+          }),
+        })
+
+        const data = await res.json()
+        const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
+
+        if (incluirExplicacao) {
+          const respostaMatch = raw.match(/Resposta:\s*([abcd])/i)
+          const explicacao = raw.match(/Explicação:\s*([\s\S]*)/i)
+          return {
+            letra: respostaMatch?.[1]?.toLowerCase() || null,
+            explicacao: explicacao?.[1]?.trim() || null,
+          }
+        } else {
+          const letra = raw.match(/[abcd]/i)?.[0]?.toLowerCase()
+          return { letra }
+        }
+      } catch (err) {
+        console.error("Erro Gemini:", err)
+        return { letra: null, erro: err.message }
+      }
+    } else if (questao.tipo === "associacao") {
+      const prompt = incluirExplicacao
+        ? `Você é um especialista na disciplina "${tituloProva}".
+
+IMPORTANTE: Responda SEMPRE em português brasileiro, mesmo que a pergunta esteja em outro idioma.
+
+Questão de associação: ${questao.enunciado}
+
+Associe cada definição com o conceito correto:
+
+${questao.alternativas
+  .map(
+    (a, i) =>
+      `${i + 1}. "${a.texto}"
+   Opções disponíveis: ${a.opcoes.map((op) => op.text).join(", ")}`,
+  )
+  .join("\n\n")}
+
+Forneça sua resposta no seguinte formato:
+Associações:
+1) [Conceito escolhido]
+2) [Conceito escolhido]
+...
+
+Explicação: [Explique em português cada associação e por que está correta]`
+        : `Você é um especialista na disciplina "${tituloProva}".
+
+Questão de associação: ${questao.enunciado}
+
+Associe cada definição com o conceito correto:
+
+${questao.alternativas
+  .map(
+    (a, i) =>
+      `${i + 1}. "${a.texto}"
+   Opções: ${a.opcoes.map((op) => op.text).join(", ")}`,
+  )
+  .join("\n\n")}
+
+Responda no formato:
+1) [Conceito]
+2) [Conceito]
+...`
+
+      try {
+        const res = await fetch(GEMINI_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: incluirExplicacao ? 600 : 300,
+            },
+          }),
+        })
+
+        const data = await res.json()
+        const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
+
+        if (incluirExplicacao) {
+          const associacoesMatch = raw.match(/Associações:\s*([\s\S]*?)(?=Explicação:|$)/i)
+          const explicacaoMatch = raw.match(/Explicação:\s*([\s\S]*)/i)
+
+          const respostas =
+            associacoesMatch?.[1]?.match(/\d\)\s*([^\n\d]+)/g)?.map((r) => r.replace(/\d\)\s*/, "").trim()) || []
+
+          return {
+            respostas,
+            explicacao: explicacaoMatch?.[1]?.trim() || null,
+          }
+        } else {
+          const respostas = raw.match(/\d\)\s*([^\n\d]+)/g)?.map((r) => r.replace(/\d\)\s*/, "").trim()) || []
+          return { respostas }
+        }
+      } catch (err) {
+        console.error("Erro Gemini:", err)
+        return { respostas: [], erro: err.message }
+      }
+    }
+
+    return { erro: "Tipo de questão não suportado" }
+  }
+
+  function criarElementoQuestao(questao) {
+    const item = document.createElement("div")
+    item.className = "questao-item fade-in"
+    item.dataset.index = questao.index
+    item.innerHTML = `
+      <div class="questao-title">${questao.enunciado.substring(0, 120)}${questao.enunciado.length > 120 ? "..." : ""}</div>
+      <div class="questao-status">
+        <span>Q${questao.index + 1} (${questao.tipo === "multipla" ? "Múltipla" : "Associação"})</span>
+        <button class="questao-btn" data-action="resolver" data-index="${questao.index}">Resolver</button>
+      </div>
+      <div class="questao-actions hidden"></div>
+      <div class="explanation" id="explanation-${questao.index}">
+        <div class="explanation-header">
+          <span>🧠</span>
+          <span>Explicação da IA</span>
+        </div>
+        <div class="explanation-content"></div>
+      </div>
+    `
+    return item
+  }
+
+  // Função global para resolver questão
+  window.resolverQuestao = async (index) => {
+    const questoes = obterQuestoes()
+    const questao = questoes[index]
+    const showReasoning = document.getElementById("show-reasoning").checked
+    const autoShowExplanation = document.getElementById("auto-show-explanation").checked
+
+    if (!questao) return
+
+    const questaoEl = document.querySelector(`.questao-item[data-index="${index}"]`)
+    if (!questaoEl) return
+
+    questaoEl.className = "questao-item processing"
+    questaoEl.querySelector(".questao-status").innerHTML = `
+      <span>Processando...</span>
+      <span>⏳</span>
+    `
+    questaoEl.querySelector(".questao-actions").classList.add("hidden")
+
+    try {
+      const resposta = await gerarResposta(questao, showReasoning)
+
+      if (questao.tipo === "multipla") {
+        const alvo = questao.alternativas.find((a) => a.letra === resposta.letra)
+
+        if (alvo) {
+          alvo.input.checked = true
+          alvo.input.dispatchEvent(new Event("change", { bubbles: true }))
+
+          questaoEl.className = "questao-item success"
+          questaoEl.querySelector(".questao-status").innerHTML = `
+            <span class="questao-result">✓ ${resposta.letra.toUpperCase()}) ${alvo.texto.substring(0, 25)}...</span>
+          `
+
+          // Atualizar ações
+          const actionsEl = questaoEl.querySelector(".questao-actions")
+          actionsEl.classList.remove("hidden")
+          actionsEl.innerHTML = `
+            <button class="btn-explain" data-action="toggle-explanation" data-index="${index}">
+              <span>💡</span>
+              <span>Ver explicação</span>
+            </button>
+            <button class="btn-retry" data-action="resolver" data-index="${index}">
+              <span>🔄</span>
+              <span>Tentar novamente</span>
+            </button>
+          `
+
+          if (showReasoning && resposta.explicacao) {
+            const explanationContent = questaoEl.querySelector(".explanation-content")
+            explanationContent.innerHTML = resposta.explicacao
+
+            if (autoShowExplanation) {
+              questaoEl.querySelector(".explanation").classList.add("show")
+            }
+          }
+        } else {
+          throw new Error("Resposta não encontrada")
+        }
+      } else if (questao.tipo === "associacao") {
+        let acertos = 0
+        const resultados = []
+        let temErro = false
+
+        questao.alternativas.forEach((linha, i) => {
+          const respostaSugerida = resposta.respostas[i]
+          if (respostaSugerida) {
+            // Busca a opção que melhor corresponde à resposta
+            const opcaoEncontrada = linha.opcoes.find(
+              (op) =>
+                op.text.toLowerCase().includes(respostaSugerida.toLowerCase()) ||
+                respostaSugerida.toLowerCase().includes(op.text.toLowerCase()) ||
+                // Busca por palavras-chave
+                op.text
+                  .toLowerCase()
+                  .split(" ")
+                  .some((palavra) => respostaSugerida.toLowerCase().includes(palavra) && palavra.length > 3),
+            )
+
+            if (opcaoEncontrada) {
+              linha.select.value = opcaoEncontrada.value
+              linha.select.dispatchEvent(new Event("change", { bubbles: true }))
+              acertos++
+              resultados.push({
+                texto: `${i + 1}. ${opcaoEncontrada.text}`,
+                sucesso: true,
+              })
+            } else {
+              temErro = true
+              resultados.push({
+                texto: `${i + 1}. ❌ Não encontrado: ${respostaSugerida}`,
+                sucesso: false,
+              })
+            }
+          } else {
+            temErro = true
+            resultados.push({
+              texto: `${i + 1}. ❌ Sem resposta`,
+              sucesso: false,
+            })
+          }
+        })
+
+        // Determinar status baseado em acertos parciais
+        if (acertos === questao.alternativas.length) {
+          questaoEl.className = "questao-item success"
+        } else if (acertos > 0) {
+          questaoEl.className = "questao-item partial"
+        } else {
+          questaoEl.className = "questao-item error"
+        }
+
+        questaoEl.querySelector(".questao-status").innerHTML = `
+          <span class="${acertos === questao.alternativas.length ? "questao-result" : "questao-partial"}">
+            ${acertos}/${questao.alternativas.length} associações
+          </span>
+        `
+
+        // Mostrar resultados das associações
+        if (questaoEl.querySelector(".associations-result")) {
+          questaoEl.querySelector(".associations-result").remove()
+        }
+
+        const associationsResult = document.createElement("div")
+        associationsResult.className = "associations-result"
+        associationsResult.innerHTML = resultados
+          .map((r) => `<div class="association-item ${!r.sucesso ? "error" : ""}">${r.texto}</div>`)
+          .join("")
+        questaoEl.appendChild(associationsResult)
+
+        // Atualizar ações
+        const actionsEl = questaoEl.querySelector(".questao-actions")
+        actionsEl.classList.remove("hidden")
+        actionsEl.innerHTML = `
+          <button class="btn-explain" data-action="toggle-explanation" data-index="${index}">
+            <span>💡</span>
+            <span>Ver explicação</span>
+          </button>
+          <button class="btn-retry" data-action="resolver" data-index="${index}">
+            <span>🔄</span>
+            <span>Tentar novamente</span>
+          </button>
+        `
+
+        if (showReasoning && resposta.explicacao) {
+          const explanationContent = questaoEl.querySelector(".explanation-content")
+          explanationContent.innerHTML = resposta.explicacao
+
+          if (autoShowExplanation) {
+            questaoEl.querySelector(".explanation").classList.add("show")
+          }
+        }
+      }
+    } catch (err) {
+      questaoEl.className = "questao-item error"
+      questaoEl.querySelector(".questao-status").innerHTML = `
+        <span class="questao-error">Erro: ${err.message}</span>
+      `
+
+      // Adicionar botão de tentar novamente
+      const actionsEl = questaoEl.querySelector(".questao-actions")
+      actionsEl.classList.remove("hidden")
+      actionsEl.innerHTML = `
+        <button class="btn-retry" data-action="resolver" data-index="${index}">
+          <span>🔄</span>
+          <span>Tentar novamente</span>
+        </button>
+      `
+    }
+  }
+
+  // Função global para toggle da explicação
+  window.toggleExplanation = (index) => {
+    const explanation = document.getElementById(`explanation-${index}`)
+    if (explanation) {
+      explanation.classList.toggle("show")
+
+      // Atualizar texto do botão
+      const questaoEl = document.querySelector(`.questao-item[data-index="${index}"]`)
+      const btnExplain = questaoEl.querySelector(".btn-explain")
+
+      if (explanation.classList.contains("show")) {
+        btnExplain.innerHTML = `
+          <span>🔍</span>
+          <span>Ocultar explicação</span>
+        `
+      } else {
+        btnExplain.innerHTML = `
+          <span>💡</span>
+          <span>Ver explicação</span>
+        `
+      }
+    }
+  }
+
+  async function resolverTodasQuestoes() {
+    const questoes = obterQuestoes()
+    const container = document.getElementById("questoes-list")
+    const startBtn = document.getElementById("gemini-start")
+    const delay_ms = Number.parseInt(document.getElementById("delay-input").value)
+
+    startBtn.disabled = true
+    startBtn.textContent = "Processando..."
+    container.innerHTML = ""
+
+    questoes.forEach((questao) => {
+      const questaoEl = criarElementoQuestao(questao)
+      container.appendChild(questaoEl)
+    })
+
+    for (let i = 0; i < questoes.length; i++) {
+      await window.resolverQuestao(i)
+      if (i < questoes.length - 1) await delay(delay_ms)
+    }
+
+    startBtn.disabled = false
+    startBtn.textContent = "Resolver Todas"
+  }
+
+  // Event delegation para botões dinâmicos
+  document.addEventListener("click", (e) => {
+    if (e.target.closest('[data-action="resolver"]')) {
+      const index = Number.parseInt(e.target.closest('[data-action="resolver"]').dataset.index)
+      window.resolverQuestao(index)
+    } else if (e.target.closest('[data-action="toggle-explanation"]')) {
+      const index = Number.parseInt(e.target.closest('[data-action="toggle-explanation"]').dataset.index)
+      window.toggleExplanation(index)
+    }
+  })
+
+  // Inicialização
+  const splash = createSplashScreen()
+  await delay(1000)
+
+  createUI()
+  const conexaoOk = await testarConexao()
+
+  removeSplashScreen()
+
+  if (!conexaoOk) {
+    updateStatus("Falha na conexão")
+  }
+})()
