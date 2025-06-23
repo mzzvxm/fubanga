@@ -1,10 +1,11 @@
 // ==UserScript==
-// @name         Funiber Bypass Enhanced v4
+// @name         Funiber Bypass Enhanced v5
 // @namespace    Violentmonkey Scripts
-// @version      3.5
-// @description  Responde automaticamente questões da prova com Gemini - Versão corrigida
+// @version      4.0
+// @description  Responde automaticamente questões da prova com Gemini - Com drag e auto idioma PT
 // @match        *://*.funiber.org/*
 // @grant        GM_addStyle
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=panal.funiber.org
 // @author       mzzvxm
 // ==/UserScript==
 
@@ -12,9 +13,49 @@
   const API_KEY = "AIzaSyDzHvHcoBgfeNJf0iwM2AfjQM3mQ9sW-W8"
   const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`
   let isPanelMinimized = false
+  let isDragging = false
+  const dragOffset = { x: 0, y: 0 }
 
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  // Função para detectar e alterar idioma para português
+  async function verificarEAlterarIdioma() {
+    try {
+      const langMenu = document.querySelector(".dropdown.langmenu")
+      if (!langMenu) return false
+
+      const currentLangElement = langMenu.querySelector(".dropdown-toggle")
+      if (!currentLangElement) return false
+
+      const currentLangText = currentLangElement.textContent.trim()
+
+      // Verifica se já está em português
+      if (currentLangText.includes("Português") || currentLangText.includes("(pt)")) {
+        console.log("Idioma já está em português")
+        return true
+      }
+
+      // Procura pelo link do português
+      const portugueseLink = langMenu.querySelector('a[href*="lang=pt"]')
+      if (portugueseLink) {
+        console.log("Alterando idioma para português...")
+
+        // Simula o clique no link do português
+        portugueseLink.click()
+
+        // Aguarda um pouco para a página recarregar
+        await delay(2000)
+        return true
+      } else {
+        console.log("Link do português não encontrado")
+        return false
+      }
+    } catch (error) {
+      console.error("Erro ao verificar/alterar idioma:", error)
+      return false
+    }
   }
 
   function obterTituloProva() {
@@ -47,7 +88,7 @@
         <div class="loading-dots">
           <span></span><span></span><span></span>
         </div>
-        <div class="splash-status">Conectando...</div>
+        <div class="splash-status">Verificando idioma...</div>
       </div>
     `
     document.body.appendChild(splash)
@@ -139,7 +180,7 @@
     const panel = document.createElement("div")
     panel.id = "gemini-panel"
     panel.innerHTML = `
-      <div class="panel-header">
+      <div class="panel-header" id="panel-header">
         <span class="logo">🧠</span>
         <span class="title">Funiber Bypass</span>
         <div class="controls">
@@ -168,6 +209,9 @@
           <div class="setting">
             <label><input type="checkbox" id="auto-show-explanation"> Mostrar explicação automaticamente</label>
           </div>
+          <div class="setting">
+            <label><input type="checkbox" id="auto-language" checked> Auto alterar para português</label>
+          </div>
         </div>
         <div id="questoes-list" class="questoes"></div>
       </div>
@@ -190,6 +234,7 @@
         z-index: 9999;
         overflow: hidden;
         transition: all 0.3s ease;
+        user-select: none;
       }
       .panel-header {
         display: flex;
@@ -198,6 +243,14 @@
         background: #f8fafc;
         border-bottom: 1px solid #e5e7eb;
         cursor: move;
+        user-select: none;
+      }
+      .panel-header:hover {
+        background: #f1f5f9;
+      }
+      .panel-header.dragging {
+        background: #e2e8f0;
+        cursor: grabbing;
       }
       .logo {
         font-size: 16px;
@@ -508,7 +561,56 @@
     `)
 
     setupEventListeners()
+    setupDragFunctionality()
     return panel
+  }
+
+  function setupDragFunctionality() {
+    const panel = document.getElementById("gemini-panel")
+    const header = document.getElementById("panel-header")
+
+    header.addEventListener("mousedown", (e) => {
+      // Não iniciar drag se clicar nos botões de controle
+      if (e.target.closest(".controls")) return
+
+      isDragging = true
+      header.classList.add("dragging")
+
+      const rect = panel.getBoundingClientRect()
+      dragOffset.x = e.clientX - rect.left
+      dragOffset.y = e.clientY - rect.top
+
+      document.addEventListener("mousemove", handleDrag)
+      document.addEventListener("mouseup", handleDragEnd)
+
+      e.preventDefault()
+    })
+
+    function handleDrag(e) {
+      if (!isDragging) return
+
+      const newX = e.clientX - dragOffset.x
+      const newY = e.clientY - dragOffset.y
+
+      // Limitar às bordas da tela
+      const maxX = window.innerWidth - panel.offsetWidth
+      const maxY = window.innerHeight - panel.offsetHeight
+
+      const constrainedX = Math.max(0, Math.min(newX, maxX))
+      const constrainedY = Math.max(0, Math.min(newY, maxY))
+
+      panel.style.left = constrainedX + "px"
+      panel.style.top = constrainedY + "px"
+      panel.style.right = "auto"
+      panel.style.bottom = "auto"
+    }
+
+    function handleDragEnd() {
+      isDragging = false
+      header.classList.remove("dragging")
+      document.removeEventListener("mousemove", handleDrag)
+      document.removeEventListener("mouseup", handleDragEnd)
+    }
   }
 
   function setupEventListeners() {
@@ -1026,7 +1128,7 @@ Responda no formato:
     startBtn.textContent = "Resolver Todas"
   }
 
-  // Event delegation para botões dinâmicos
+
   document.addEventListener("click", (e) => {
     if (e.target.closest('[data-action="resolver"]')) {
       const index = Number.parseInt(e.target.closest('[data-action="resolver"]').dataset.index)
@@ -1041,6 +1143,19 @@ Responda no formato:
   const splash = createSplashScreen()
   await delay(1000)
 
+  // Verificar e alterar idioma se necessário
+  const autoLanguage = true // Pode ser controlado por configuração
+  if (autoLanguage) {
+    updateSplashStatus("Verificando idioma...")
+    const idiomaAlterado = await verificarEAlterarIdioma()
+
+    if (idiomaAlterado) {
+      updateSplashStatus("Idioma alterado para português")
+      await delay(1000)
+    }
+  }
+
+  updateSplashStatus("Conectando...")
   createUI()
   const conexaoOk = await testarConexao()
 
