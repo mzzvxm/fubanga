@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Funiber Bypass Enhanced v5
+// @name         Funiber Bypass v6
 // @namespace    Violentmonkey Scripts
-// @version      4.0
-// @description  Responde automaticamente questões da prova com Gemini - Com drag e auto idioma PT
+// @version      5.0
+// @description  Responde automaticamente questões com Gemini ou DeepSeek - Dual AI Support
 // @match        *://*.funiber.org/*
 // @grant        GM_addStyle
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=panal.funiber.org
@@ -10,8 +10,26 @@
 // ==/UserScript==
 
 ;(async () => {
-  const API_KEY = "AIzaSyDzHvHcoBgfeNJf0iwM2AfjQM3mQ9sW-W8"
-  const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`
+  // Configurações das APIs
+  const AI_CONFIGS = {
+    gemini: {
+      name: "Gemini",
+      icon: "🧠",
+      apiKey: "AIzaSyDzHvHcoBgfeNJf0iwM2AfjQM3mQ9sW-W8",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+      testPrompt: "Diga apenas: ok",
+    },
+    deepseek: {
+      name: "DeepSeek",
+      icon: "🤖",
+      apiKey: "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",
+      endpoint: "https://openrouter.ai/api/v1/chat/completions",
+      model: "deepseek/deepseek-chat:free",
+      testPrompt: "Diga apenas: ok",
+    },
+  }
+
+  let currentAI = "gemini"
   let isPanelMinimized = false
   let isDragging = false
   const dragOffset = { x: 0, y: 0 }
@@ -41,11 +59,7 @@
       const portugueseLink = langMenu.querySelector('a[href*="lang=pt"]')
       if (portugueseLink) {
         console.log("Alterando idioma para português...")
-
-        // Simula o clique no link do português
         portugueseLink.click()
-
-        // Aguarda um pouco para a página recarregar
         await delay(2000)
         return true
       } else {
@@ -59,7 +73,6 @@
   }
 
   function obterTituloProva() {
-    // Busca o título da prova na página
     const tituloElement =
       document.querySelector("span.multilang.traducir-TR046.traducido") ||
       document.querySelector('span[lang="fnbr"].multilang') ||
@@ -69,13 +82,12 @@
       return tituloElement.textContent.trim()
     }
 
-    // Fallback: busca outros possíveis seletores
     const breadcrumb = document.querySelector(".breadcrumb-item.active, .page-header-headings h1")
     if (breadcrumb) {
       return breadcrumb.textContent.trim()
     }
 
-    return "@by mzzvxm" // fallback padrão
+    return "@by mzzvxm"
   }
 
   function createSplashScreen() {
@@ -83,8 +95,8 @@
     splash.id = "gemini-splash"
     splash.innerHTML = `
       <div class="splash-content">
-        <div class="splash-logo">🧠</div>
-        <h1>Funiber Bypass</h1>
+        <div class="splash-logo">🤖</div>
+        <h1>Funiber Bypass Dual AI</h1>
         <div class="loading-dots">
           <span></span><span></span><span></span>
         </div>
@@ -181,9 +193,12 @@
     panel.id = "gemini-panel"
     panel.innerHTML = `
       <div class="panel-header" id="panel-header">
-        <span class="logo">🧠</span>
+        <span class="logo" id="current-ai-icon">${AI_CONFIGS[currentAI].icon}</span>
         <span class="title">Funiber Bypass</span>
         <div class="controls">
+          <button id="ai-switch" title="Alternar IA" class="ai-switch-btn">
+            <span class="ai-name">${AI_CONFIGS[currentAI].name}</span>
+          </button>
           <button id="gemini-minimize" title="Minimizar">−</button>
           <div class="status-dot" id="status-dot"></div>
         </div>
@@ -211,6 +226,16 @@
           </div>
           <div class="setting">
             <label><input type="checkbox" id="auto-language" checked> Auto alterar para português</label>
+          </div>
+          <div class="ai-status">
+            <div class="ai-item">
+              <span class="ai-indicator" id="gemini-indicator">🧠</span>
+              <span>Gemini: <span id="gemini-status-text">Testando...</span></span>
+            </div>
+            <div class="ai-item">
+              <span class="ai-indicator" id="deepseek-indicator">🤖</span>
+              <span>DeepSeek: <span id="deepseek-status-text">Testando...</span></span>
+            </div>
           </div>
         </div>
         <div id="questoes-list" class="questoes"></div>
@@ -267,6 +292,27 @@
         align-items: center;
         gap: 8px;
       }
+      .ai-switch-btn {
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 10px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .ai-switch-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+      }
+      .ai-name {
+        font-size: 10px;
+      }
       .controls button {
         background: none;
         border: none;
@@ -281,7 +327,7 @@
         font-size: 14px;
         font-weight: bold;
       }
-      .controls button:hover {
+      .controls button:hover:not(.ai-switch-btn) {
         background: #e5e7eb;
         color: #374151;
       }
@@ -386,6 +432,26 @@
       }
       .setting input[type="checkbox"] {
         margin: 0;
+      }
+      .ai-status {
+        margin-top: 12px;
+        padding-top: 8px;
+        border-top: 1px solid #e5e7eb;
+      }
+      .ai-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 6px;
+        font-size: 11px;
+      }
+      .ai-indicator {
+        font-size: 12px;
+        opacity: 0.5;
+        transition: opacity 0.3s ease;
+      }
+      .ai-indicator.active {
+        opacity: 1;
       }
       .questoes {
         display: flex;
@@ -570,7 +636,6 @@
     const header = document.getElementById("panel-header")
 
     header.addEventListener("mousedown", (e) => {
-      // Não iniciar drag se clicar nos botões de controle
       if (e.target.closest(".controls")) return
 
       isDragging = true
@@ -592,7 +657,6 @@
       const newX = e.clientX - dragOffset.x
       const newY = e.clientY - dragOffset.y
 
-      // Limitar às bordas da tela
       const maxX = window.innerWidth - panel.offsetWidth
       const maxY = window.innerHeight - panel.offsetHeight
 
@@ -617,6 +681,42 @@
     document.getElementById("gemini-minimize").addEventListener("click", toggleMinimize)
     document.getElementById("gemini-settings").addEventListener("click", toggleSettings)
     document.getElementById("gemini-start").addEventListener("click", resolverTodasQuestoes)
+    document.getElementById("ai-switch").addEventListener("click", switchAI)
+  }
+
+  async function switchAI() {
+    const newAI = currentAI === "gemini" ? "deepseek" : "gemini"
+
+    updateStatus(`Testando ${AI_CONFIGS[newAI].name}...`, false)
+
+    const isWorking = await testarConexaoAI(newAI)
+
+    if (isWorking) {
+      currentAI = newAI
+      updateAIInterface()
+      updateStatus(`${AI_CONFIGS[currentAI].name} conectado`, true)
+      document.getElementById("gemini-start").disabled = false
+    } else {
+      updateStatus(`${AI_CONFIGS[newAI].name} falhou, mantendo ${AI_CONFIGS[currentAI].name}`, true)
+      // Fallback: testa a IA atual novamente
+      const currentWorking = await testarConexaoAI(currentAI)
+      if (!currentWorking) {
+        updateStatus("Ambas as IAs falharam", false)
+        document.getElementById("gemini-start").disabled = true
+      }
+    }
+  }
+
+  function updateAIInterface() {
+    const icon = document.getElementById("current-ai-icon")
+    const switchBtn = document.getElementById("ai-switch")
+
+    icon.textContent = AI_CONFIGS[currentAI].icon
+    switchBtn.querySelector(".ai-name").textContent = AI_CONFIGS[currentAI].name
+
+    // Atualizar indicadores
+    document.getElementById("gemini-indicator").classList.toggle("active", currentAI === "gemini")
+    document.getElementById("deepseek-indicator").classList.toggle("active", currentAI === "deepseek")
   }
 
   function toggleMinimize() {
@@ -657,34 +757,85 @@
     courseEl.innerHTML = `📚 ${titulo}`
   }
 
+  async function testarConexaoAI(aiType) {
+    const config = AI_CONFIGS[aiType]
+
+    try {
+      if (aiType === "gemini") {
+        const res = await fetch(`${config.endpoint}?key=${config.apiKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ role: "user", parts: [{ text: config.testPrompt }] }],
+          }),
+        })
+
+        const data = await res.json()
+        const response = data?.candidates?.[0]?.content?.parts?.[0]?.text?.toLowerCase()
+
+        const isWorking = response && response.includes("ok")
+        document.getElementById(`${aiType}-status-text`).textContent = isWorking ? "✅ Online" : "❌ Offline"
+        return isWorking
+      } else if (aiType === "deepseek") {
+        const res = await fetch(config.endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${config.apiKey}`,
+            "HTTP-Referer": window.location.origin,
+            "X-Title": "Funiber Bypass",
+          },
+          body: JSON.stringify({
+            model: config.model,
+            messages: [{ role: "user", content: config.testPrompt }],
+            max_tokens: 50,
+            temperature: 0.1,
+          }),
+        })
+
+        const data = await res.json()
+        const response = data?.choices?.[0]?.message?.content?.toLowerCase()
+
+        const isWorking = response && response.includes("ok")
+        document.getElementById(`${aiType}-status-text`).textContent = isWorking ? "✅ Online" : "❌ Offline"
+        return isWorking
+      }
+    } catch (err) {
+      console.error(`Erro ${config.name}:`, err)
+      document.getElementById(`${aiType}-status-text`).textContent = "❌ Erro"
+      return false
+    }
+
+    return false
+  }
+
   async function testarConexao() {
     try {
-      updateSplashStatus("Testando conexão...")
+      updateSplashStatus("Testando conexões...")
 
-      const res = await fetch(GEMINI_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: "Diga apenas: ok" }] }],
-        }),
-      })
+      // Testa ambas as IAs
+      const geminiWorking = await testarConexaoAI("gemini")
+      const deepseekWorking = await testarConexaoAI("deepseek")
 
-      const data = await res.json()
-
-      if (data?.candidates?.[0]?.content?.parts?.[0]?.text?.toLowerCase().includes("ok")) {
-        updateStatus("Conectado", true)
-        document.getElementById("gemini-start").disabled = false
-        updateSplashStatus("Conectado!")
-
-        // Detectar título da prova
-        const titulo = obterTituloProva()
-        updateCourseInfo(titulo)
-
-        await delay(800)
-        return true
+      // Escolhe a IA principal
+      if (geminiWorking) {
+        currentAI = "gemini"
+      } else if (deepseekWorking) {
+        currentAI = "deepseek"
       } else {
-        throw new Error("Resposta inesperada da API")
+        throw new Error("Nenhuma IA disponível")
       }
+
+      updateAIInterface()
+      updateStatus(`${AI_CONFIGS[currentAI].name} conectado`, true)
+      document.getElementById("gemini-start").disabled = false
+      updateSplashStatus("Conectado!")
+
+      const titulo = obterTituloProva()
+      updateCourseInfo(titulo)
+
+      await delay(800)
+      return true
     } catch (err) {
       updateStatus(`Erro: ${err.message}`)
       updateSplashStatus("Erro de conexão")
@@ -706,7 +857,6 @@
       return { tipo: "multipla", el, index, enunciado, alternativas }
     })
 
-    // Melhor detecção de questões de associação
     const questoesAssociacao = [...document.querySelectorAll("div.formulation")]
       .filter((formulation) => {
         return formulation.querySelector("table.answer") && formulation.querySelectorAll("select").length > 0
@@ -748,6 +898,7 @@
 
   async function gerarResposta(questao, incluirExplicacao = false) {
     const tituloProva = obterTituloProva()
+    const config = AI_CONFIGS[currentAI]
 
     if (questao.tipo === "multipla") {
       const prompt = incluirExplicacao
@@ -773,20 +924,41 @@ ${questao.alternativas.map((a) => `${a.letra}) ${a.texto}`).join("\n")}
 Responda apenas com a letra da alternativa correta.`
 
       try {
-        const res = await fetch(GEMINI_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: incluirExplicacao ? 500 : 100,
-            },
-          }),
-        })
+        let res, data, raw
 
-        const data = await res.json()
-        const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
+        if (currentAI === "gemini") {
+          res = await fetch(`${config.endpoint}?key=${config.apiKey}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.2,
+                maxOutputTokens: incluirExplicacao ? 500 : 100,
+              },
+            }),
+          })
+          data = await res.json()
+          raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
+        } else if (currentAI === "deepseek") {
+          res = await fetch(config.endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${config.apiKey}`,
+              "HTTP-Referer": window.location.origin,
+              "X-Title": "Funiber Bypass",
+            },
+            body: JSON.stringify({
+              model: config.model,
+              messages: [{ role: "user", content: prompt }],
+              max_tokens: incluirExplicacao ? 500 : 100,
+              temperature: 0.2,
+            }),
+          })
+          data = await res.json()
+          raw = data?.choices?.[0]?.message?.content || ""
+        }
 
         if (incluirExplicacao) {
           const respostaMatch = raw.match(/Resposta:\s*([abcd])/i)
@@ -800,7 +972,7 @@ Responda apenas com a letra da alternativa correta.`
           return { letra }
         }
       } catch (err) {
-        console.error("Erro Gemini:", err)
+        console.error(`Erro ${config.name}:`, err)
         return { letra: null, erro: err.message }
       }
     } else if (questao.tipo === "associacao") {
@@ -848,20 +1020,41 @@ Responda no formato:
 ...`
 
       try {
-        const res = await fetch(GEMINI_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ role: "user", parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: incluirExplicacao ? 600 : 300,
-            },
-          }),
-        })
+        let res, data, raw
 
-        const data = await res.json()
-        const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
+        if (currentAI === "gemini") {
+          res = await fetch(`${config.endpoint}?key=${config.apiKey}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.2,
+                maxOutputTokens: incluirExplicacao ? 600 : 300,
+              },
+            }),
+          })
+          data = await res.json()
+          raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || ""
+        } else if (currentAI === "deepseek") {
+          res = await fetch(config.endpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${config.apiKey}`,
+              "HTTP-Referer": window.location.origin,
+              "X-Title": "Funiber Bypass",
+            },
+            body: JSON.stringify({
+              model: config.model,
+              messages: [{ role: "user", content: prompt }],
+              max_tokens: incluirExplicacao ? 600 : 300,
+              temperature: 0.2,
+            }),
+          })
+          data = await res.json()
+          raw = data?.choices?.[0]?.message?.content || ""
+        }
 
         if (incluirExplicacao) {
           const associacoesMatch = raw.match(/Associações:\s*([\s\S]*?)(?=Explicação:|$)/i)
@@ -879,7 +1072,7 @@ Responda no formato:
           return { respostas }
         }
       } catch (err) {
-        console.error("Erro Gemini:", err)
+        console.error(`Erro ${config.name}:`, err)
         return { respostas: [], erro: err.message }
       }
     }
@@ -900,7 +1093,7 @@ Responda no formato:
       <div class="questao-actions hidden"></div>
       <div class="explanation" id="explanation-${questao.index}">
         <div class="explanation-header">
-          <span>🧠</span>
+          <span>${AI_CONFIGS[currentAI].icon}</span>
           <span>Explicação da IA</span>
         </div>
         <div class="explanation-content"></div>
@@ -923,7 +1116,7 @@ Responda no formato:
 
     questaoEl.className = "questao-item processing"
     questaoEl.querySelector(".questao-status").innerHTML = `
-      <span>Processando...</span>
+      <span>Processando com ${AI_CONFIGS[currentAI].name}...</span>
       <span>⏳</span>
     `
     questaoEl.querySelector(".questao-actions").classList.add("hidden")
@@ -943,7 +1136,6 @@ Responda no formato:
             <span class="questao-result">✓ ${resposta.letra.toUpperCase()}) ${alvo.texto.substring(0, 25)}...</span>
           `
 
-          // Atualizar ações
           const actionsEl = questaoEl.querySelector(".questao-actions")
           actionsEl.classList.remove("hidden")
           actionsEl.innerHTML = `
@@ -971,17 +1163,14 @@ Responda no formato:
       } else if (questao.tipo === "associacao") {
         let acertos = 0
         const resultados = []
-        let temErro = false
 
         questao.alternativas.forEach((linha, i) => {
           const respostaSugerida = resposta.respostas[i]
           if (respostaSugerida) {
-            // Busca a opção que melhor corresponde à resposta
             const opcaoEncontrada = linha.opcoes.find(
               (op) =>
                 op.text.toLowerCase().includes(respostaSugerida.toLowerCase()) ||
                 respostaSugerida.toLowerCase().includes(op.text.toLowerCase()) ||
-                // Busca por palavras-chave
                 op.text
                   .toLowerCase()
                   .split(" ")
@@ -997,14 +1186,12 @@ Responda no formato:
                 sucesso: true,
               })
             } else {
-              temErro = true
               resultados.push({
                 texto: `${i + 1}. ❌ Não encontrado: ${respostaSugerida}`,
                 sucesso: false,
               })
             }
           } else {
-            temErro = true
             resultados.push({
               texto: `${i + 1}. ❌ Sem resposta`,
               sucesso: false,
@@ -1012,7 +1199,6 @@ Responda no formato:
           }
         })
 
-        // Determinar status baseado em acertos parciais
         if (acertos === questao.alternativas.length) {
           questaoEl.className = "questao-item success"
         } else if (acertos > 0) {
@@ -1027,7 +1213,6 @@ Responda no formato:
           </span>
         `
 
-        // Mostrar resultados das associações
         if (questaoEl.querySelector(".associations-result")) {
           questaoEl.querySelector(".associations-result").remove()
         }
@@ -1039,7 +1224,6 @@ Responda no formato:
           .join("")
         questaoEl.appendChild(associationsResult)
 
-        // Atualizar ações
         const actionsEl = questaoEl.querySelector(".questao-actions")
         actionsEl.classList.remove("hidden")
         actionsEl.innerHTML = `
@@ -1068,7 +1252,6 @@ Responda no formato:
         <span class="questao-error">Erro: ${err.message}</span>
       `
 
-      // Adicionar botão de tentar novamente
       const actionsEl = questaoEl.querySelector(".questao-actions")
       actionsEl.classList.remove("hidden")
       actionsEl.innerHTML = `
@@ -1086,7 +1269,6 @@ Responda no formato:
     if (explanation) {
       explanation.classList.toggle("show")
 
-      // Atualizar texto do botão
       const questaoEl = document.querySelector(`.questao-item[data-index="${index}"]`)
       const btnExplain = questaoEl.querySelector(".btn-explain")
 
@@ -1128,7 +1310,7 @@ Responda no formato:
     startBtn.textContent = "Resolver Todas"
   }
 
-
+  // Event delegation para botões dinâmicos
   document.addEventListener("click", (e) => {
     if (e.target.closest('[data-action="resolver"]')) {
       const index = Number.parseInt(e.target.closest('[data-action="resolver"]').dataset.index)
@@ -1144,7 +1326,7 @@ Responda no formato:
   await delay(1000)
 
   // Verificar e alterar idioma se necessário
-  const autoLanguage = true // Pode ser controlado por configuração
+  const autoLanguage = true
   if (autoLanguage) {
     updateSplashStatus("Verificando idioma...")
     const idiomaAlterado = await verificarEAlterarIdioma()
