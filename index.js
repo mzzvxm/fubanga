@@ -16,7 +16,7 @@
       name: "Gemini",
       icon: "🧠",
       apiKey: "AIzaSyDzHvHcoBgfeNJf0iwM2AfjQM3mQ9sW-W8",
-      endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+      endpoint: "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
       testPrompt: "Diga apenas: ok",
     },
     deepseek: {
